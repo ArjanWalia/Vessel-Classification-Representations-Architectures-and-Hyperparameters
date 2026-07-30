@@ -2,12 +2,11 @@
 
 End-to-end pipeline for underwater vessel classification: build leakage-free
 train/validation/test splits from the VTUAD and a custom ONC dataset, convert
-the audio into three representations (mel spectrogram, 3-channel MCG, MFCC),
-sweep hyperparameter grids for seven model/representation combinations, and
+the audio into three representations (mel spectrogram, 3-channel MCG (mel, cqt, gamma), MFCC),
+sweep hyperparameter grids for 10 model/representation combinations, and
 evaluate the best checkpoints on the test set.
 
-Everything runs locally on plain folders — no Google Drive, no tar archives,
-no Google Sheets. All paths derive from a single **paths cell** at the top of
+Everything runs locally on plain folders. All paths derive from a single **paths cell** at the top of
 the notebook: set `BASE_DIR` once, run that cell first, and every other cell
 finds its inputs and outputs automatically. Results grids are written as CSV
 files; test results are printed to the terminal.
@@ -20,10 +19,6 @@ pip install pandas tqdm numpy librosa soundfile scikit-learn joblib \
 ```
 
 Classes: `background`, `cargo`, `passengership`, `tanker`, `tug`.
-
-Notebook-on-macOS caveat: if a cell using `multiprocessing` or a PyTorch
-`DataLoader` hangs or errors, set `WORKERS = 1` / `NUM_WORKERS = 0` in its
-config block. Training uses CUDA if available, then Apple `mps`, then CPU.
 
 ## 0. Paths and inputs
 
@@ -59,7 +54,7 @@ MOVE = False                               # copy (False) or move (True)
 
 ## 2. VTUAD: build train / validation / test
 
-Three cells, run in order — **train, then validation, then test**. Each cell
+Three cells, run in order, **train, then validation, then test**. Each cell
 randomly picks ship IDs (seeded), copies clips until the per-class target is
 met, and renames what it consumed with a `_used` suffix so later splits can
 never reuse the same ship. Background has a single ship ID, so its *files* are
@@ -86,8 +81,7 @@ records the configuration used; it is reference, not something to run.
 ## 4. ONC: group clips by class / MMSI
 
 Reads the classified-clip metadata CSV and places every WAV into
-`<class>/<mmsi>/` folders (hardlink, symlink, or copy — or cut into fixed
-1-second segments). Writes `grouped_manifest.csv` + `grouped_summary.csv`.
+`<class>/<mmsi>/` folders. Writes `grouped_manifest.csv` + `grouped_summary.csv`.
 
 ```python
 METADATA_ROOT = str(ONC_METADATA_ROOT)             # from the paths cell
@@ -133,24 +127,21 @@ root_source = str(OUTPUTS)     # folder containing the four datasets
 All three read `INPUT_DIR/<split>/<class>/*.wav` and share the same STFT
 settings (`sr 16000, n_fft 1024, hop 128`) on 1-second clips.
 
-**Mel spectrograms** — `(128, 126)` arrays, log-scaled + min-max to [0, 1]:
+**Mel spectrograms**`
 
 ```python
 INPUT_DIR = OUTPUTS / "cumulative_dataset"
 OUTPUT_DIR = OUTPUTS / "mel_dataset"      # mirrored <split>/<class>/*.npy
 ```
 
-**MCG (3-channel mel / CQT / gammatone)** — `(3, 128, 126)` CHW arrays, each
-channel dB + min-max normalized:
+**MCG (3-channel mel / CQT / gammatone)**
 
 ```python
 INPUT_DIR = OUTPUTS / "cumulative_dataset"
 OUTPUT_DIR = OUTPUTS / "mcg_dataset"
 ```
 
-**MFCC features** — 20 MFCCs aggregated as mean+std over time (40 features per
-clip), standardized with a scaler fit on train only. Writes `X_<split>.npy`,
-`y_<split>.npy`, the scaler arrays, `classes.json`, and `metadata.json`:
+**MFCC features** —
 
 ```python
 INPUT_DIR = OUTPUTS / "cumulative_dataset"
@@ -195,7 +186,7 @@ START_LR, START_EPOCHS = 0.05, 10       # first grid cell to run
 | Mel + ViT | `mel_dataset` | `google/vit-base-patch16-224` | `Outputs/vit_mel/vit_mel_best.pt` |
 | WAV + AST | `ast_features` (from raw wavs) | `MIT/ast-finetuned-speech-commands-v2` | `Outputs/ast_wav/ast_wav_best.pt` |
 
-The three MFCC cells sweep classical models on the standardized features and
+The three machine learning cells sweep classical models on the standardized features and
 save the best model with joblib plus a JSON log:
 
 ```python
@@ -214,8 +205,7 @@ OUTPUT_DIR = OUTPUTS / "knn_mfcc"      # results CSV + best .joblib
 ## 9. Testing (test accuracy, printed to terminal)
 
 One `(testing)` cell per trained combination. Each loads the best model from
-its training cell's `OUTPUT_DIR`, evaluates the `test` split, and prints — no
-files are written — the classification report, a text confusion matrix, the
+its training cell's `OUTPUT_DIR`, evaluates the `test` split, and prints: the classification report, a text confusion matrix, the
 validation → test gap, and a final line:
 
 ```
