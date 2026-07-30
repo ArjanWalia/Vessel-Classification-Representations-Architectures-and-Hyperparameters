@@ -143,19 +143,22 @@ INPUT_DIR  = Path("Outputs/cumulative_dataset")
 OUTPUT_DIR = Path("Outputs/mfcc_dataset")
 ```
 
-**WAV + AST working copy (optional)** — threaded folder-to-folder copy of the
-wav tree for AST; skip it if you train straight from the source folder:
+**WAV (for AST)** — the AST model consumes the raw waveforms, preprocessed by
+its own feature extractor. This cell precomputes those `(128, 128)` input
+features once for every clip in every split into a folder cache, so the AST
+training and testing cells skip extraction and start immediately
+(skip-existing, so it resumes cleanly):
 
 ```python
-SRC_DIR = Path("Outputs/cumulative_dataset")
-DST_DIR = Path("Outputs/ast_dataset")
+WAV_DIR = Path("Outputs/cumulative_dataset")
+FEATURE_CACHE = Path("Outputs/ast_features")   # mirrored <split>/<class>/*.npy
 ```
 
 ---
 
 ## 8. Training (grid searches, validation accuracy)
 
-The six deep-learning cells share one shape: a fresh model per grid cell over
+The seven deep-learning cells share one shape: a fresh model per grid cell over
 `GRID_LRS = [0.05 ... 1e-6]` × `GRID_EPOCHS = [10, 20, 30, 40, 50]`, AdamW,
 batch 64, no augmentation. After every cell the validation-accuracy grid is
 rewritten to `OUTPUT_DIR/results_grid.csv` (rows = LR, columns = epochs) and
@@ -176,6 +179,7 @@ START_LR, START_EPOCHS = 0.05, 10          # first grid cell to run
 | mel + resnet50 | `mel_dataset` | `microsoft/resnet-50` | `Outputs/resnet50_mel/resnet50_mel_best.pt` |
 | MEL + VGGNET19 | `mel_dataset` | torchvision VGG19 | `Outputs/vgg19_mel/vgg19_mel_best.pt` |
 | Mel + ViT | `mel_dataset` | `google/vit-base-patch16-224` | `Outputs/vit_mel/vit_mel_best.pt` |
+| WAV + AST | `ast_features` (from raw wavs) | `MIT/ast-finetuned-speech-commands-v2` | `Outputs/ast_wav/ast_wav_best.pt` |
 
 The three MFCC cells sweep classical models on the standardized features and
 save the best model with joblib plus a JSON log:
@@ -213,16 +217,16 @@ TEST_SPLIT = "test"
 The MFCC testing cells point at the `.joblib` model (KNN, RF) or the saved
 coefficient/intercept arrays (logistic regression, evaluated with plain numpy)
 plus the training grid log for the validation comparison. The WAV + AST
-testing cell reads wavs from `Outputs/cumulative_dataset`, caches extracted
-AST features under `Outputs/ast_features`, and expects a checkpoint at
-`Outputs/ast_wav/ast_wav_best.pt` (AST training is not part of this notebook).
+testing cell reads the wav tree, extracts AST features for the test split once
+into a folder cache at `Outputs/ast_features` (reused on later runs), and
+loads the checkpoint from `Outputs/ast_wav/ast_wav_best.pt`.
 
 ## Run order
 
 ```
 Inputs -> [1-2] VTUAD splits (x3 ranges) -> [3-5] ONC splits
        -> [6] cumulative dataset
-       -> [7] mel / mcg / mfcc datasets
+       -> [7] mel / mcg / mfcc / wav (AST) datasets
        -> [8] training grids  (results_grid.csv, best model)
        -> [9] testing         (TEST ACCURACY printed)
 ```
