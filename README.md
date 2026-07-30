@@ -7,9 +7,10 @@ sweep hyperparameter grids for seven model/representation combinations, and
 evaluate the best checkpoints on the test set.
 
 Everything runs locally on plain folders — no Google Drive, no tar archives,
-no Google Sheets. Every cell has its paths and settings collected in an
-`EDIT THESE` block at the top; set them once and run the cell. Results grids
-are written as CSV files; test results are printed to the terminal.
+no Google Sheets. All paths derive from a single **paths cell** at the top of
+the notebook: set `BASE_DIR` once, run that cell first, and every other cell
+finds its inputs and outputs automatically. Results grids are written as CSV
+files; test results are printed to the terminal.
 
 ## Requirements
 
@@ -24,11 +25,22 @@ Notebook-on-macOS caveat: if a cell using `multiprocessing` or a PyTorch
 `DataLoader` hangs or errors, set `WORKERS = 1` / `NUM_WORKERS = 0` in its
 config block. Training uses CUDA if available, then Apple `mps`, then CPU.
 
-## 0. Inputs
+## 0. Paths and inputs
 
-Download the VTUAD dataset into the `Inputs` folder (one subfolder per
+Run the **PROJECT PATHS** cell at the top of the notebook first — it defines
+the globals every other cell uses:
+
+```python
+BASE_DIR = Path(".../vessel_classification")   # CHANGE THIS — the only path you must set
+INPUTS  = BASE_DIR / "Inputs"    # VTUAD range folders + ONC data live here
+OUTPUTS = BASE_DIR / "Outputs"   # everything the pipeline produces
+ONC_METADATA_ROOT = INPUTS / "ONC" / "07b_classified_wav_files" / "inclusion_2000_exclusion_4000"
+```
+
+Download the VTUAD dataset into `Inputs/` (one subfolder per
 inclusion/exclusion range: `2000_4000`, `3000_5000`, `4000_6000`), and place
-the custom ONC dataset in `Inputs` as well.
+the custom ONC data under `Inputs/ONC/`. The paths cell must be re-run after
+every kernel restart before running anything else.
 
 ---
 
@@ -39,9 +51,10 @@ splits. Reads the VTUAD `metadata_<split>.csv` files and copies each clip into
 `<class>_ship_ids/ship_id_<mmsi>/` folders.
 
 ```python
-ROOT = Path(".../Inputs/2000_4000")               # VTUAD range folder
-OUT  = Path("Outputs/2000_4000/2000_4000_splits") # ship-id folders written here
-MOVE = False                                      # copy (False) or move (True)
+RANGE = "2000_4000"                        # CHANGE for 3000_5000 / 4000_6000
+ROOT = INPUTS / RANGE                      # VTUAD range folder
+OUT = OUTPUTS / RANGE / f"{RANGE}_splits"  # ship-id folders written here
+MOVE = False                               # copy (False) or move (True)
 ```
 
 ## 2. VTUAD: build train / validation / test
@@ -53,13 +66,14 @@ never reuse the same ship. Background has a single ship ID, so its *files* are
 partitioned (1/3, then 1/2 of the remainder, then the rest) instead of ships.
 
 ```python
-OUT       = Path("Outputs/2000_4000/2000_4000_splits")  # step 1 output
-TRAIN_DIR = Path("Outputs/2000_4000/train")             # VAL_DIR / TEST_DIR in the other cells
-SEED      = 42
-TARGETS   = {"background": 688, "cargo": 688, ...}      # clips per class (72 val, 40 test)
+RANGE = "2000_4000"                        # CHANGE for 3000_5000 / 4000_6000
+OUT = OUTPUTS / RANGE / f"{RANGE}_splits"  # step 1 output
+TRAIN_DIR = OUTPUTS / RANGE / "train"      # VAL_DIR / TEST_DIR in the other cells
+SEED = 42
+TARGETS = {"background": 688, "cargo": 688, ...}   # clips per class (72 val, 40 test)
 ```
 
-Repeat steps 1–2 for `3000_5000` and `4000_6000` — only the paths change.
+Repeat steps 1–2 for `3000_5000` and `4000_6000` — only `RANGE` changes.
 
 ---
 
@@ -76,9 +90,9 @@ Reads the classified-clip metadata CSV and places every WAV into
 1-second segments). Writes `grouped_manifest.csv` + `grouped_summary.csv`.
 
 ```python
-METADATA_ROOT = ".../07b_classified_wav_files/inclusion_2000_exclusion_4000"
+METADATA_ROOT = str(ONC_METADATA_ROOT)             # from the paths cell
 METADATA_FILE = "metadata_1s.csv"
-OUTPUT_DIR    = "Outputs/ONC/ship_splits"
+OUTPUT_DIR = str(OUTPUTS / "ONC" / "ship_splits")
 UNIT = "file"       # "file" = whole WAVs, "segment" = cut into SECONDS-long segments
 MODE = "hardlink"   # how whole files are placed
 ```
@@ -92,10 +106,10 @@ remains), cuts the segments, and marks used units `_used` in the grouped
 folders. Writes `<split>_manifest.csv` and `<split>_report.csv`.
 
 ```python
-GROUPED_DIR  = "Outputs/ONC/ship_splits"    # step 4 OUTPUT_DIR
-METADATA_CSV = ".../metadata_1s.csv"
-SPLITS_DIR   = "Outputs/ONC/dataset_splits"
-SPLIT        = "train"                      # then "validation", then "test"
+GROUPED_DIR = str(OUTPUTS / "ONC" / "ship_splits")        # step 4 OUTPUT_DIR
+METADATA_CSV = str(ONC_METADATA_ROOT / "metadata_1s.csv")
+SPLITS_DIR = str(OUTPUTS / "ONC" / "dataset_splits")
+SPLIT = "train"                             # then "validation", then "test"
 ```
 
 ---
@@ -108,8 +122,8 @@ so nothing collides. Prints per-dataset and per-class counts.
 
 ```python
 SOURCE_DATASETS = ['2000_4000', '3000_5000', '4000_6000', 'ONC']
-root_source = ".../Outputs"    # folder containing the four datasets
-# -> writes to <root_source>/cumulative_dataset
+root_source = str(OUTPUTS)     # folder containing the four datasets
+# -> writes to Outputs/cumulative_dataset
 ```
 
 ---
@@ -122,16 +136,16 @@ settings (`sr 16000, n_fft 1024, hop 128`) on 1-second clips.
 **Mel spectrograms** — `(128, 126)` arrays, log-scaled + min-max to [0, 1]:
 
 ```python
-INPUT_DIR  = Path("Outputs/cumulative_dataset")
-OUTPUT_DIR = Path("Outputs/mel_dataset")      # mirrored <split>/<class>/*.npy
+INPUT_DIR = OUTPUTS / "cumulative_dataset"
+OUTPUT_DIR = OUTPUTS / "mel_dataset"      # mirrored <split>/<class>/*.npy
 ```
 
 **MCG (3-channel mel / CQT / gammatone)** — `(3, 128, 126)` CHW arrays, each
 channel dB + min-max normalized:
 
 ```python
-INPUT_DIR  = Path("Outputs/cumulative_dataset")
-OUTPUT_DIR = Path("Outputs/mcg_dataset")
+INPUT_DIR = OUTPUTS / "cumulative_dataset"
+OUTPUT_DIR = OUTPUTS / "mcg_dataset"
 ```
 
 **MFCC features** — 20 MFCCs aggregated as mean+std over time (40 features per
@@ -139,8 +153,8 @@ clip), standardized with a scaler fit on train only. Writes `X_<split>.npy`,
 `y_<split>.npy`, the scaler arrays, `classes.json`, and `metadata.json`:
 
 ```python
-INPUT_DIR  = Path("Outputs/cumulative_dataset")
-OUTPUT_DIR = Path("Outputs/mfcc_dataset")
+INPUT_DIR = OUTPUTS / "cumulative_dataset"
+OUTPUT_DIR = OUTPUTS / "mfcc_dataset"
 ```
 
 **WAV (for AST)** — the AST model consumes the raw waveforms, preprocessed by
@@ -150,8 +164,8 @@ training and testing cells skip extraction and start immediately
 (skip-existing, so it resumes cleanly):
 
 ```python
-WAV_DIR = Path("Outputs/cumulative_dataset")
-FEATURE_CACHE = Path("Outputs/ast_features")   # mirrored <split>/<class>/*.npy
+WAV_DIR = OUTPUTS / "cumulative_dataset"
+FEATURE_CACHE = OUTPUTS / "ast_features"   # mirrored <split>/<class>/*.npy
 ```
 
 ---
@@ -166,9 +180,9 @@ the best checkpoint is saved. `START_LR`/`START_EPOCHS` set the resume point;
 `PRIOR_RESULTS = {(lr, epochs): acc}` seeds the best from earlier sessions.
 
 ```python
-DATA_DIR   = Path("Outputs/mcg_dataset")   # or Outputs/mel_dataset
-OUTPUT_DIR = Path("Outputs/resnet50_mcg")  # results_grid.csv + best .pt
-START_LR, START_EPOCHS = 0.05, 10          # first grid cell to run
+DATA_DIR = OUTPUTS / "mcg_dataset"      # or "mel_dataset"
+OUTPUT_DIR = OUTPUTS / "resnet50_mcg"   # results_grid.csv + best .pt
+START_LR, START_EPOCHS = 0.05, 10       # first grid cell to run
 ```
 
 | Cell | Representation | Model | Best checkpoint |
@@ -185,8 +199,8 @@ The three MFCC cells sweep classical models on the standardized features and
 save the best model with joblib plus a JSON log:
 
 ```python
-DATA_DIR   = Path("Outputs/mfcc_dataset")
-OUTPUT_DIR = Path("Outputs/knn_mfcc")      # results CSV + best .joblib
+DATA_DIR = OUTPUTS / "mfcc_dataset"
+OUTPUT_DIR = OUTPUTS / "knn_mfcc"      # results CSV + best .joblib
 ```
 
 | Cell | Sweep | Results |
@@ -209,8 +223,8 @@ TEST ACCURACY: XX.XX%
 ```
 
 ```python
-DATA_DIR  = Path("Outputs/mcg_dataset")                        # matching dataset
-CKPT_PATH = Path("Outputs/resnet50_mcg/resnet50_mcg_best.pt")  # matching checkpoint
+DATA_DIR = OUTPUTS / "mcg_dataset"                           # matching dataset
+CKPT_PATH = OUTPUTS / "resnet50_mcg" / "resnet50_mcg_best.pt"  # matching checkpoint
 TEST_SPLIT = "test"
 ```
 
@@ -224,6 +238,7 @@ loads the checkpoint from `Outputs/ast_wav/ast_wav_best.pt`.
 ## Run order
 
 ```
+[0] paths cell (after every kernel restart)
 Inputs -> [1-2] VTUAD splits (x3 ranges) -> [3-5] ONC splits
        -> [6] cumulative dataset
        -> [7] mel / mcg / mfcc / wav (AST) datasets
